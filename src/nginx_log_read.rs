@@ -1,9 +1,18 @@
 use reqwest::blocking::Client;
+use serde::Serialize;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::io::SeekFrom;
+use std::net::UdpSocket;
+
+#[derive(Debug, Serialize)]
+struct NginxLogRequest {
+    metricsCode: String,
+    metricsColumns: Vec<String>,
+    metricsColumnsValue: Vec<Vec<String>>,
+}
 
 pub fn read_log(file_name: &String) {
     // 读取上一次文件读取的位置
@@ -21,6 +30,7 @@ pub fn read_log(file_name: &String) {
         .expect("文件指针移动失败!");
     let mut read_len = 1;
     let mut read_end_pos = 0;
+    let mut nginx_logs: Vec<Vec<String>> = Vec::new();
     while read_len != 0 {
         let mut line = String::new();
         let start_pos = fin.stream_position();
@@ -28,20 +38,51 @@ pub fn read_log(file_name: &String) {
             println!("start 指针： {}", pos);
         }
         read_len = fin.read_line(&mut line).expect("read line error");
-        print!("line: {}", line);
-        let fields: Vec<&str> = line.split(' ').collect();
-        for field in &fields {
-            println!("{}", field);
+        // $msec]-[$remote_addr]-[$http_x_forwarded_for]-[$request_uri]-[$status]-[$http_user_agent]-[$request_time
+        // print!("line: {}", line);
+        let fields: Vec<&str> = line.split("]-[").collect();
+        if fields.len() < 6 {
+            continue;
         }
+        let nginx_log: Vec<String> = vec![
+            String::from(fields[0]).trim().to_string(),
+            String::from(fields[1]).trim().to_string(),
+            String::from(fields[2]).trim().to_string(),
+            String::from(fields[3]).trim().to_string(),
+            String::from(fields[4]).trim().to_string(),
+            String::from(fields[5]).trim().to_string(),
+            String::from(fields[6]).trim().to_string(),
+        ];
+        nginx_logs.push(nginx_log);
         let end_pos = fin.stream_position();
         if let Result::Ok(pos) = end_pos {
             read_end_pos = pos;
             println!("end 指针： {}", pos);
         }
     }
+    let nginx_log_request = NginxLogRequest {
+        metricsCode: String::from("nginx_log_monitor"),
+        metricsColumns: vec![
+            String::from("log_time"),
+            String::from("remote_addr"),
+            String::from("http_x_forwarded_for"),
+            String::from("request"),
+            String::from("status"),
+            String::from("http_user_agent"),
+            String::from("request_time"),
+        ],
+        metricsColumnsValue: nginx_logs,
+    };
+    let local_ip = get_local_ip().unwrap().replace(".", "_");
+    let url = String::from(
+        "http://172.31.239.66/api/horus/collection/metricsCol?appName=nginx&accessParty=nginx&instanceId=",
+    )
+    .to_string()
+        + &local_ip;
+
     // 发送 horus 请求
     let client = Client::new();
-    let resp = client.post("https://httpbin.org/ip").send();
+    let resp = client.put(url).json(&vec![nginx_log_request]).send();
     match resp {
         Ok(res) => parse_resp(res),
         Err(err) => println!("请求异常！ {:?}", err),
@@ -60,4 +101,24 @@ fn parse_resp(res: reqwest::blocking::Response) {
     } else {
         println!("resp 返回失败 {:?}", res);
     }
+}
+
+/**
+ *  获取本机 IP
+ */
+pub fn get_local_ip() -> Option<String> {
+    let socket = match UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(_) => return Some(String::from("unknown")),
+    };
+
+    match socket.connect("8.8.8.8:80") {
+        Ok(()) => (),
+        Err(_) => return Some(String::from("unknown")),
+    };
+
+    match socket.local_addr() {
+        Ok(addr) => return Some(addr.ip().to_string()),
+        Err(_) => return Some(String::from("unknown")),
+    };
 }
