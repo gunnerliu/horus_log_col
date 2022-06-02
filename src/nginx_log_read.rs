@@ -73,12 +73,12 @@ pub fn read_log(setting: &Setting) {
     }
     if nginx_logs.len() > 0 {
         let nginx_log_request = NginxLogRequest {
-            metrics_code: String::from("nginx_log_monitor"),
+            metrics_code: String::from("nginxLogMonitor"),
             metrics_columns: vec![
-                String::from("log_time"),
+                String::from("marking_time"),
                 String::from("remote_addr"),
                 String::from("http_x_forwarded_for"),
-                String::from("request"),
+                String::from("request_uri"),
                 String::from("status"),
                 String::from("http_user_agent"),
                 String::from("request_time"),
